@@ -327,7 +327,7 @@
         
         // Play beep using the mobile audio system
         playBeep: function() {
-          return new Promise((resolve, reject) => {
+          try {
             console.log("Mobile beep requested");
             
             if (!this.initialized) {
@@ -349,105 +349,93 @@
             }
             
             // 실제 비프음 재생
-            this.playBeepInternal().then(success => {
-              resolve(success);
-            }).catch(err => {
-              console.error("Beep playback failed:", err);
-              reject(err);
-            });
-          });
+            this.playBeepInternal();
+          } catch (e) {
+            console.error("Beep playback failed:", e);
+          }
         },
         
         // Internal beep implementation
         playBeepInternal: function() {
-          return new Promise((resolve, reject) => {
-            try {
-              // 백그라운드 재생을 위해 Media Session 활성화
-              if ('mediaSession' in navigator) {
-                navigator.mediaSession.playbackState = 'playing';
-              }
-              
-              // Try to use Audio element first
-              if (this.soundElement) {
-                this.soundElement.currentTime = 0;
-                
-                try {
-                  if (typeof this.soundElement.play === 'function') {
-                    const playPromise = this.soundElement.play();
-                    
-                    if (playPromise !== undefined && playPromise !== null && typeof playPromise.then === 'function') {
-                      playPromise.then(() => {
-                        resolve(true);
-                      }).catch(e => {
-                        console.error("Mobile audio element play failed:", e);
-                        this.playFallbackBeep().then(resolve).catch(reject);
-                      });
-                    } else {
-                      // Promise가 지원되지 않는 경우 직접 처리
-                      console.log("Play method doesn't return a promise, using fallback directly");
-                      setTimeout(() => {
-                        // 재생 실패 가능성을 고려해 폴백 호출
-                        if (this.soundElement.paused) {
-                          this.playFallbackBeep().then(resolve).catch(reject);
-                        } else {
-                          resolve(true);
-                        }
-                      }, 500);
-                    }
-                  } else {
-                    console.error("Play method is not available on audio element");
-                    this.playFallbackBeep().then(resolve).catch(reject);
-                  }
-                } catch (playError) {
-                  console.error("Error during play attempt:", playError);
-                  this.playFallbackBeep().then(resolve).catch(reject);
-                }
-              } else {
-                // Fallback to generating tone
-                this.playFallbackBeep().then(resolve).catch(reject);
-              }
-            } catch (e) {
-              console.error("Mobile beep internal failed:", e);
-              reject(e);
+          try {
+            // 백그라운드 재생을 위해 Media Session 활성화
+            if ('mediaSession' in navigator) {
+              navigator.mediaSession.playbackState = 'playing';
             }
-          });
+            
+            // Try to use Audio element first
+            if (this.soundElement) {
+              this.soundElement.currentTime = 0;
+              
+              try {
+                if (typeof this.soundElement.play === 'function') {
+                  const playPromise = this.soundElement.play();
+                  
+                  if (playPromise !== undefined && playPromise !== null && typeof playPromise.then === 'function') {
+                    playPromise.then(() => {
+                      console.log("Audio played successfully");
+                    }).catch(e => {
+                      console.error("Mobile audio element play failed:", e);
+                      this.playFallbackBeep();
+                    });
+                  } else {
+                    // Promise가 지원되지 않는 경우 직접 처리
+                    console.log("Play method doesn't return a promise, using fallback directly");
+                    setTimeout(() => {
+                      // 재생 실패 가능성을 고려해 폴백 호출
+                      if (this.soundElement.paused) {
+                        this.playFallbackBeep();
+                      }
+                    }, 500);
+                  }
+                } else {
+                  console.error("Play method is not available on audio element");
+                  this.playFallbackBeep();
+                }
+              } catch (playError) {
+                console.error("Error during play attempt:", playError);
+                this.playFallbackBeep();
+              }
+            } else {
+              // Fallback to generating tone
+              this.playFallbackBeep();
+            }
+          } catch (e) {
+            console.error("Mobile beep internal failed:", e);
+          }
         },
         
         // Fallback beep using Web Audio API
         playFallbackBeep: function() {
-          return new Promise((resolve, reject) => {
-            try {
-              if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-              }
-              
-              // Resume if suspended
-              if (this.audioContext.state === 'suspended') {
-                this.audioContext.resume();
-              }
-              
-              // Create beep
-              const oscillator = this.audioContext.createOscillator();
-              const gainNode = this.audioContext.createGain();
-              
-              oscillator.type = 'square';
-              oscillator.frequency.setValueAtTime(800, this.audioContext.currentTime);
-              gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
-              
-              oscillator.connect(gainNode);
-              gainNode.connect(this.audioContext.destination);
-              
-              oscillator.start();
-              setTimeout(() => {
-                oscillator.stop();
-                console.log("Mobile fallback beep played");
-                resolve(true);
-              }, 300);
-            } catch (e) {
-              console.error("Mobile fallback beep failed:", e);
-              reject(e);
+          try {
+            if (!this.audioContext) {
+              this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             }
-          });
+            
+            // Resume if suspended
+            if (this.audioContext.state === 'suspended') {
+              this.audioContext.resume();
+            }
+            
+            // Create beep
+            const oscillator = this.audioContext.createOscillator();
+            const gainNode = this.audioContext.createGain();
+            
+            oscillator.type = 'square';
+            oscillator.frequency.setValueAtTime(800, this.audioContext.currentTime);
+            gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioContext.destination);
+            
+            oscillator.start();
+            setTimeout(() => {
+              oscillator.stop();
+              console.log("Mobile fallback beep played");
+            }, 300);
+          } catch (e) {
+            console.error("Mobile fallback beep failed:", e);
+          }
         }
       };
       
@@ -476,16 +464,22 @@
       // Flutter에서 호출할 수 있는 글로벌 함수 등록
       window.playAlarmSound = function() {
         console.log("playAlarmSound called from Flutter");
-        if (isIOS && window.mobileAudioSystem) {
-          return window.mobileAudioSystem.playBeep();
-        } else {
-          return playWindowsBeepSound();
+        try {
+          if (isIOS && window.mobileAudioSystem) {
+            window.mobileAudioSystem.playBeep();
+          } else {
+            playWindowsBeepSound();
+          }
+          return true;
+        } catch (e) {
+          console.error("Error playing alarm sound:", e);
+          return false;
         }
       };
       
       // Create Windows beep sound function
       function playWindowsBeepSound() {
-        return new Promise((resolve, reject) => {
+        try {
           // If audio isn't initialized yet, try to initialize it
           if (!audioInitialized) {
             try {
@@ -498,7 +492,7 @@
           // If still not initialized, we can't play sound
           if (!audioInitialized) {
             console.error("Audio not initialized - user interaction required");
-            return resolve(false);
+            return false;
           }
           
           try {
@@ -533,17 +527,20 @@
                 oscillator2.start();
                 setTimeout(() => {
                   oscillator2.stop();
-                  resolve(true);
                 }, 150);
               }, 200);
             }, 150);
             
             console.log("Alarm sound played successfully");
+            return true;
           } catch (e) {
             console.error("Error playing alarm sound:", e);
-            reject(e);
+            return false;
           }
-        });
+        } catch (e) {
+          console.error("Error playing Windows beep sound:", e);
+          return false;
+        }
       }
       
       // 앱이 종료될 때 리소스 정리
