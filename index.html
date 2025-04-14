@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="/alarmapp/">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A new Flutter project.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="alarmapp">
+  <meta name="apple-touch-fullscreen" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  
+  <!-- iOS PWA 관련 메타 태그 추가 -->
+  <meta name="theme-color" content="#000000">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>alarmapp</title>
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <!-- Audio implementation with Safari support -->
+  <script>
+    // Global variables for audio context
+    let audioContext = null;
+    let audioInitialized = false;
+    let unlocked = false;
+    let mediaSessionActive = false;
+    let persistentAudioElement = null;
+    let silentAudioInterval = null;
+    let vibrationActive = false;
+    let wakeLockObj = null;
+
+    // Init function to run on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log("DOM loaded, setting up audio system");
+      
+      // 지속적인 오디오 요소 생성 (iOS 백그라운드 재생용)
+      setupPersistentAudio();
+      
+      // Add touch/click listeners to unlock audio on all user interactions
+      const unlockEvents = ['touchstart', 'touchend', 'mousedown', 'keydown'];
+      unlockEvents.forEach(event => {
+        document.body.addEventListener(event, unlockAudio, { once: true });
+      });
+      
+      // Function to initialize and unlock audio
+      function unlockAudio() {
+        if (unlocked) return;
+        console.log("User interaction detected! Unlocking audio...");
+        
+        try {
+          // Create audio context
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          
+          // For Safari: play and immediately pause a silent sound
+          // This "unlocks" the audio context
+          const silentBuffer = audioContext.createBuffer(1, 1, 22050);
+          const source = audioContext.createBufferSource();
+          source.buffer = silentBuffer;
+          source.connect(audioContext.destination);
+          source.start(0);
+          source.stop(0.001);
+          
+          // Mark audio as initialized
+          audioInitialized = true;
+          unlocked = true;
+          
+          // Setup Media Session API for background playback
+          setupMediaSession();
+          
+          // Try to acquire wake lock if supported
+          requestWakeLock();
+          
+          // Remove event listeners once unlocked
+          unlockEvents.forEach(event => {
+            document.body.removeEventListener(event, unlockAudio);
+          });
+          
+          console.log("Audio system unlocked successfully!");
+        } catch (e) {
+          console.error("Error initializing audio:", e);
+        }
+      }
+      
+      // Setup persistent audio element for iOS background playback
+      function setupPersistentAudio() {
+        try {
+          persistentAudioElement = document.createElement('audio');
+          persistentAudioElement.id = 'persistent-audio';
+          persistentAudioElement.src = 'assets/assets/sounds/silent.mp3'; 
+          persistentAudioElement.loop = true;
+          persistentAudioElement.preload = 'auto';
+          persistentAudioElement.setAttribute('playsinline', '');
+          persistentAudioElement.setAttribute('webkit-playsinline', '');
+          persistentAudioElement.volume = 0.01; // 최소 볼륨으로 설정
+          document.body.appendChild(persistentAudioElement);
+          
+          // iOS에서 자동 재생 방지 정책 우회를 위한 이벤트 리스너
+          document.addEventListener('touchstart', function() {
+            if (persistentAudioElement && persistentAudioElement.paused) {
+              persistentAudioElement.play().catch(e => console.log('Silent audio play failed:', e));
+              
+              // 30초마다 오디오 재생을 갱신하여 백그라운드 재생 유지
+              if (!silentAudioInterval) {
+                silentAudioInterval = setInterval(() => {
+                  if (persistentAudioElement.paused) {
+                    persistentAudioElement.play().catch(e => console.log('Silent audio refresh failed:', e));
+                  }
+                }, 30000);
+              }
+            }
+          }, { once: true });
+          
+          console.log("Persistent audio element setup complete");
+        } catch (e) {
+          console.error("Error setting up persistent audio:", e);
+        }
+      }
+      
+      // Setup Media Session API for background playback
+      function setupMediaSession() {
+        if ('mediaSession' in navigator) {
+          console.log("Setting up Media Session API");
+          
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'AlarmApp',
+            artist: 'Background Audio',
+            album: 'Alarm Sounds',
+            artwork: [
+              { src: 'icons/Icon-192.png', sizes: '192x192', type: 'image/png' }
+            ]
+          });
+          
+          // iOS에서 백그라운드 재생 유지를 위한 미디어 세션 설정
+          navigator.mediaSession.setActionHandler('play', function() {
+            console.log("Media Session: play action triggered");
+            if (persistentAudioElement && persistentAudioElement.paused) {
+              persistentAudioElement.play().catch(e => console.log('Media session play failed:', e));
+            }
+          });
+          
+          navigator.mediaSession.setActionHandler('pause', function() {
+            console.log("Media Session: pause action triggered");
+            // 알람 앱이므로 일시정지 처리하지 않음 (백그라운드 재생 유지)
+          });
+          
+          mediaSessionActive = true;
+          console.log("Media Session API setup complete");
+        } else {
+          console.log("Media Session API not supported");
+        }
+      }
+      
+      // Try to request wake lock to prevent screen from turning off
+      function requestWakeLock() {
+        if ('wakeLock' in navigator) {
+          console.log("Wake Lock API available, requesting lock");
+          
+          try {
+            navigator.wakeLock.request('screen').then(lock => {
+              wakeLockObj = lock;
+              console.log("Wake Lock acquired");
+              
+              // Wake lock can be released when page visibility changes
+              wakeLockObj.addEventListener('release', () => {
+                console.log("Wake Lock released");
+              });
+              
+              // Re-acquire wake lock when page becomes visible again
+              document.addEventListener('visibilitychange', async () => {
+                if (document.visibilityState === 'visible' && !wakeLockObj) {
+                  try {
+                    wakeLockObj = await navigator.wakeLock.request('screen');
+                    console.log("Wake Lock re-acquired");
+                  } catch (err) {
+                    console.error("Failed to re-acquire Wake Lock:", err);
+                  }
+                }
+              });
+            }).catch(err => {
+              console.error("Failed to acquire Wake Lock:", err);
+            });
+          } catch (err) {
+            console.error("Wake Lock API error:", err);
+          }
+        } else {
+          console.log("Wake Lock API not supported");
+        }
+      }
+      
+      // iOS-specific audio implementation
+      window.mobileAudioSystem = {
+        initialized: false,
+        soundElement: null,
+        audioContext: null,
+        vibrationPattern: [100, 30, 100, 30, 100],
+        
+        // Initialize the iOS audio system with preloaded sound
+        init: function() {
+          if (this.initialized) return;
+          
+          try {
+            console.log("Initializing mobile audio system");
+            
+            // 오디오 요소 생성 및 설정
+            this.soundElement = document.createElement('audio');
+            this.soundElement.id = 'beep-sound';
+            this.soundElement.src = 'assets/assets/sounds/beep.mp3';
+            this.soundElement.preload = 'auto';
+            this.soundElement.setAttribute('playsinline', '');
+            this.soundElement.setAttribute('webkit-playsinline', '');
+            document.body.appendChild(this.soundElement);
+            
+            // Web Audio API 초기화
+            try {
+              this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+              console.warn("Web Audio API not supported:", e);
+            }
+            
+            this.initialized = true;
+            console.log("Mobile audio system initialized");
+          } catch (e) {
+            console.error("Error initializing mobile audio system:", e);
+          }
+        },
+        
+        // Handle user interaction to unlock audio
+        handleInteraction: function() {
+          console.log("Handle interaction called");
+          
+          // 사용자 인터랙션으로 오디오 잠금 해제
+          this.unlockAudio();
+          
+          // 지속적인 오디오 재생 시작 (iOS 백그라운드 재생 유지)
+          if (persistentAudioElement && persistentAudioElement.paused) {
+            persistentAudioElement.play().catch(e => console.log('Persistent audio play failed:', e));
+          }
+          
+          // 진동 지원 확인
+          if ('vibrate' in navigator) {
+            // 진동 테스트 (iOS에서는 작동하지 않을 수 있음)
+            navigator.vibrate(1);
+            vibrationActive = true;
+            console.log("Vibration API supported");
+          } else {
+            console.log("Vibration API not supported");
+          }
+        },
+        
+        // Setup audio unlock for iOS Safari
+        unlockAudio: function() {
+          if (this.soundElement) {
+            console.log("Attempting to unlock audio...");
+            
+            // iOS에서 오디오 잠금 해제를 위한 사용자 인터랙션 처리
+            const playPromise = this.soundElement.play();
+            
+            if (playPromise !== undefined) {
+              playPromise.then(() => {
+                console.log("Audio unlocked successfully");
+                // 즉시 일시 정지 (잠금만 해제하기 위함)
+                this.soundElement.pause();
+                this.soundElement.currentTime = 0;
+                
+                // 백그라운드 재생을 위한 미디어 세션 설정
+                if ('mediaSession' in navigator && !mediaSessionActive) {
+                  setupMediaSession();
+                }
+                
+                // 지속적인 무음 오디오 재생 시작
+                if (persistentAudioElement && persistentAudioElement.paused) {
+                  persistentAudioElement.play().catch(e => console.log('Persistent audio play failed after unlock:', e));
+                }
+              }).catch(e => {
+                console.warn("Audio unlock failed:", e);
+                // 사용자 인터랙션 없이 자동 재생이 차단된 경우
+                // 다음 인터랙션에서 다시 시도
+              });
+            }
+          }
+        },
+        
+        // Play beep using the mobile audio system
+        playBeep: function() {
+          return new Promise((resolve, reject) => {
+            console.log("Mobile beep requested");
+            
+            if (!this.initialized) {
+              this.init();
+            }
+            
+            // 무음 모드 감지 (iOS에서는 불가능하지만 시도)
+            let isMuted = false;
+            
+            // 진동 지원 및 활성화된 경우 진동 실행 (무음 모드에서 대체용)
+            if (vibrationActive && 'vibrate' in navigator) {
+              navigator.vibrate(this.vibrationPattern);
+              console.log("Vibration triggered");
+            }
+            
+            // 지속적인 오디오가 재생 중인지 확인하고 필요시 재시작
+            if (persistentAudioElement && persistentAudioElement.paused) {
+              persistentAudioElement.play().catch(e => console.log('Failed to restart persistent audio:', e));
+            }
+            
+            // 실제 비프음 재생
+            this.playBeepInternal().then(success => {
+              resolve(success);
+            }).catch(err => {
+              console.error("Beep playback failed:", err);
+              reject(err);
+            });
+          });
+        },
+        
+        // Internal beep implementation
+        playBeepInternal: function() {
+          return new Promise((resolve, reject) => {
+            try {
+              // 백그라운드 재생을 위해 Media Session 활성화
+              if ('mediaSession' in navigator) {
+                navigator.mediaSession.playbackState = 'playing';
+              }
+              
+              // Try to use Audio element first
+              if (this.soundElement) {
+                this.soundElement.currentTime = 0;
+                
+                try {
+                  if (typeof this.soundElement.play === 'function') {
+                    const playPromise = this.soundElement.play();
+                    
+                    if (playPromise !== undefined && playPromise !== null && typeof playPromise.then === 'function') {
+                      playPromise.then(() => {
+                        resolve(true);
+                      }).catch(e => {
+                        console.error("Mobile audio element play failed:", e);
+                        this.playFallbackBeep().then(resolve).catch(reject);
+                      });
+                    } else {
+                      // Promise가 지원되지 않는 경우 직접 처리
+                      console.log("Play method doesn't return a promise, using fallback directly");
+                      setTimeout(() => {
+                        // 재생 실패 가능성을 고려해 폴백 호출
+                        if (this.soundElement.paused) {
+                          this.playFallbackBeep().then(resolve).catch(reject);
+                        } else {
+                          resolve(true);
+                        }
+                      }, 500);
+                    }
+                  } else {
+                    console.error("Play method is not available on audio element");
+                    this.playFallbackBeep().then(resolve).catch(reject);
+                  }
+                } catch (playError) {
+                  console.error("Error during play attempt:", playError);
+                  this.playFallbackBeep().then(resolve).catch(reject);
+                }
+              } else {
+                // Fallback to generating tone
+                this.playFallbackBeep().then(resolve).catch(reject);
+              }
+            } catch (e) {
+              console.error("Mobile beep internal failed:", e);
+              reject(e);
+            }
+          });
+        },
+        
+        // Fallback beep using Web Audio API
+        playFallbackBeep: function() {
+          return new Promise((resolve, reject) => {
+            try {
+              if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+              }
+              
+              // Resume if suspended
+              if (this.audioContext.state === 'suspended') {
+                this.audioContext.resume();
+              }
+              
+              // Create beep
+              const oscillator = this.audioContext.createOscillator();
+              const gainNode = this.audioContext.createGain();
+              
+              oscillator.type = 'square';
+              oscillator.frequency.setValueAtTime(800, this.audioContext.currentTime);
+              gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+              
+              oscillator.connect(gainNode);
+              gainNode.connect(this.audioContext.destination);
+              
+              oscillator.start();
+              setTimeout(() => {
+                oscillator.stop();
+                console.log("Mobile fallback beep played");
+                resolve(true);
+              }, 300);
+            } catch (e) {
+              console.error("Mobile fallback beep failed:", e);
+              reject(e);
+            }
+          });
+        }
+      };
+      
+      // Auto-detect iOS and initialize audio system
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+      if (isIOS) {
+        console.log("iOS device detected - initializing mobile audio system");
+        window.mobileAudioSystem.init();
+        
+        // Add special handling for iOS
+        document.body.addEventListener('click', function() {
+          window.mobileAudioSystem.handleInteraction();
+        });
+        
+        // iOS에서 화면 잠금 방지를 위한 추가 처리
+        document.addEventListener('visibilitychange', function() {
+          if (document.visibilityState === 'hidden') {
+            // 화면이 백그라운드로 갈 때 오디오 재생 유지
+            if (persistentAudioElement && persistentAudioElement.paused) {
+              persistentAudioElement.play().catch(e => console.log('Background audio play failed:', e));
+            }
+          }
+        });
+      }
+      
+      // Flutter에서 호출할 수 있는 글로벌 함수 등록
+      window.playAlarmSound = function() {
+        console.log("playAlarmSound called from Flutter");
+        if (isIOS && window.mobileAudioSystem) {
+          return window.mobileAudioSystem.playBeep();
+        } else {
+          return playWindowsBeepSound();
+        }
+      };
+      
+      // Create Windows beep sound function
+      function playWindowsBeepSound() {
+        return new Promise((resolve, reject) => {
+          // If audio isn't initialized yet, try to initialize it
+          if (!audioInitialized) {
+            try {
+              unlockAudio();
+            } catch (e) {
+              console.error("Failed to initialize audio:", e);
+            }
+          }
+          
+          // If still not initialized, we can't play sound
+          if (!audioInitialized) {
+            console.error("Audio not initialized - user interaction required");
+            return resolve(false);
+          }
+          
+          try {
+            // Resume audio context if it's suspended (important for Safari)
+            if (audioContext.state === 'suspended') {
+              audioContext.resume();
+            }
+            
+            // Create sound nodes
+            const gainNode = audioContext.createGain();
+            const oscillator = audioContext.createOscillator();
+            
+            // Set up the sound
+            oscillator.type = 'square';
+            oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+            gainNode.gain.setValueAtTime(0.25, audioContext.currentTime);
+            
+            // Connect and play
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            // Play the beep pattern
+            oscillator.start();
+            setTimeout(() => {
+              oscillator.stop();
+              // Second beep after delay
+              setTimeout(() => {
+                const oscillator2 = audioContext.createOscillator();
+                oscillator2.type = 'square';
+                oscillator2.frequency.setValueAtTime(600, audioContext.currentTime);
+                oscillator2.connect(gainNode);
+                oscillator2.start();
+                setTimeout(() => {
+                  oscillator2.stop();
+                  resolve(true);
+                }, 150);
+              }, 200);
+            }, 150);
+            
+            console.log("Alarm sound played successfully");
+          } catch (e) {
+            console.error("Error playing alarm sound:", e);
+            reject(e);
+          }
+        });
+      }
+      
+      // 앱이 종료될 때 리소스 정리
+      window.addEventListener('beforeunload', function() {
+        if (silentAudioInterval) {
+          clearInterval(silentAudioInterval);
+        }
+        if (wakeLockObj) {
+          wakeLockObj.release();
+        }
+      });
+      
+      console.log("Audio system setup completed");
+    });
+  </script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
