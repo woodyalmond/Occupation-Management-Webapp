@@ -12,12 +12,19 @@ const urlsToCache = [
   '/alarmapp/assets/fonts/MaterialIcons-Regular.otf',
   '/alarmapp/assets/AssetManifest.json',
   '/alarmapp/assets/FontManifest.json',
-  '/alarmapp/assets/NOTICES'
+  '/alarmapp/assets/NOTICES',
+  '/alarmapp/icons/Icon-192.png',
+  '/alarmapp/icons/Icon-512.png',
+  '/alarmapp/icons/Icon-152.png',
+  '/alarmapp/icons/Icon-167.png',
+  '/alarmapp/icons/Icon-180.png',
+  '/alarmapp/icons/splash.png'
 ];
 
 // 서비스 워커 설치 시 캐시 초기화
 self.addEventListener('install', event => {
   console.log('서비스 워커 설치 중...');
+  self.skipWaiting(); // 즉시 활성화
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
@@ -39,6 +46,9 @@ self.addEventListener('activate', event => {
           return caches.delete(cacheName);
         })
       );
+    }).then(() => {
+      console.log('서비스 워커가 클라이언트 요청을 처리할 준비가 되었습니다.');
+      return self.clients.claim();
     })
   );
 });
@@ -84,7 +94,7 @@ self.addEventListener('push', event => {
     body: '타이머가 완료되었습니다!',
     icon: '/alarmapp/icons/Icon-192.png',
     badge: '/alarmapp/icons/Icon-192.png',
-    vibrate: [200, 100, 200, 100, 200],
+    vibrate: [300, 100, 300, 100, 300, 100, 300],
     tag: 'alarm-notification',
     renotify: true,
     requireInteraction: true,
@@ -149,5 +159,38 @@ self.addEventListener('sync', event => {
   if (event.tag === 'alarm-sync') {
     console.log('백그라운드 동기화 요청:', event);
     // 여기에 백그라운드 동기화 로직 추가
+  }
+});
+
+// 주기적 동기화 처리 (iOS에서는 지원되지 않음)
+self.addEventListener('periodicsync', event => {
+  if (event.tag === 'alarm-periodic-sync') {
+    console.log('주기적 동기화 요청:', event);
+    // 여기에 주기적 동기화 로직 추가
+  }
+});
+
+// 메시지 처리 (메인 스레드와 통신)
+self.addEventListener('message', event => {
+  console.log('메시지 수신:', event.data);
+  
+  if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
+    // 메인 스레드에서 요청한 알림 표시
+    self.registration.showNotification('알람 타이머', {
+      body: event.data.message || '타이머가 완료되었습니다!',
+      icon: '/alarmapp/icons/Icon-192.png',
+      badge: '/alarmapp/icons/Icon-192.png',
+      vibrate: [300, 100, 300, 100, 300],
+      tag: 'alarm-notification',
+      renotify: true
+    });
+  }
+  
+  // 클라이언트에 응답
+  if (event.source) {
+    event.source.postMessage({
+      type: 'NOTIFICATION_SHOWN',
+      success: true
+    });
   }
 });
