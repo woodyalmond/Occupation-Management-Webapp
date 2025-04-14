@@ -95,11 +95,12 @@
       // 이미 초기화되었는지 확인
       if (audioCtx) {
         if (audioCtx.state === 'suspended') {
-          audioCtx.resume().then(() => {
-            console.log("오디오 컨텍스트 재개됨");
-          }).catch(err => {
+          try {
+            audioCtx.resume();
+            console.log("오디오 컨텍스트 재개 시도");
+          } catch (err) {
             console.error("오디오 컨텍스트 재개 실패:", err);
-          });
+          }
         }
         return;
       }
@@ -130,23 +131,39 @@
     }
     
     // Wake Lock 요청 (화면 꺼짐 방지)
-    async function requestWakeLock() {
+    function requestWakeLock() {
       if ('wakeLock' in navigator) {
         try {
-          wakeLock = await navigator.wakeLock.request('screen');
-          console.log("Wake Lock 활성화됨");
-          
-          wakeLock.addEventListener('release', () => {
-            console.log("Wake Lock 해제됨");
-            wakeLock = null;
-            
-            // 타이머 실행 중이면 다시 요청
-            if (timerState.isRunning) {
-              requestWakeLock();
+          // 기존 wakeLock 해제
+          if (wakeLock) {
+            try {
+              wakeLock.release();
+            } catch (err) {
+              console.error("기존 Wake Lock 해제 실패:", err);
             }
-          });
+          }
+          
+          // 새 wakeLock 요청 (동기적 방식으로 변경)
+          navigator.wakeLock.request('screen')
+            .then(function(lock) {
+              wakeLock = lock;
+              console.log("Wake Lock 획득 성공");
+              
+              // 해제 이벤트 처리
+              wakeLock.addEventListener('release', () => {
+                console.log("Wake Lock 해제됨");
+                
+                // 타이머가 실행 중이면 다시 요청
+                if (timerState.isRunning) {
+                  setTimeout(requestWakeLock, 1000);
+                }
+              });
+            })
+            .catch(function(err) {
+              console.error("Wake Lock 요청 실패:", err);
+            });
         } catch (err) {
-          console.error("Wake Lock 요청 실패:", err);
+          console.error("Wake Lock API 오류:", err);
         }
       } else {
         console.log("Wake Lock API 지원되지 않음");
@@ -428,9 +445,11 @@
       
       // Wake Lock 해제
       if (wakeLock) {
-        wakeLock.release().catch(err => {
+        try {
+          wakeLock.release();
+        } catch (err) {
           console.error("Wake Lock 해제 실패:", err);
-        });
+        }
         wakeLock = null;
       }
       
@@ -456,6 +475,16 @@
     // 알람 소리 재생
     window.playAlarmSound = function() {
       console.log("알람 소리 재생");
+      
+      // 오디오 초기화 확인
+      if (!audioCtx) {
+        try {
+          initAudio();
+        } catch (e) {
+          console.error("오디오 초기화 실패:", e);
+        }
+      }
+      
       return playBeep();
     };
   </script>
