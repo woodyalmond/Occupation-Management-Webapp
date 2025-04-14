@@ -52,6 +52,16 @@
     let silentAudioInterval = null;
     let vibrationActive = false;
     let wakeLockObj = null;
+    let timerWorker = null;
+    
+    // 타이머 상태 저장 변수
+    let timerState = {
+      isRunning: false,
+      startTime: 0,
+      duration: 0,
+      remainingTime: 0,
+      timerId: null
+    };
 
     // Init function to run on page load
     document.addEventListener('DOMContentLoaded', function() {
@@ -59,6 +69,9 @@
       
       // 지속적인 오디오 요소 생성 (iOS 백그라운드 재생용)
       setupPersistentAudio();
+      
+      // 백그라운드 타이머 워커 초기화
+      initTimerWorker();
       
       // Add touch/click listeners to unlock audio on all user interactions
       const unlockEvents = ['touchstart', 'touchend', 'mousedown', 'keydown'];
@@ -195,42 +208,221 @@
         }
       }
       
-      // Try to request wake lock to prevent screen from turning off
+      // Wake Lock API 요청 함수
       function requestWakeLock() {
-        if ('wakeLock' in navigator) {
-          console.log("Wake Lock API available, requesting lock");
-          
-          try {
-            navigator.wakeLock.request('screen').then(lock => {
-              wakeLockObj = lock;
-              console.log("Wake Lock acquired");
-              
-              // Wake lock can be released when page visibility changes
-              wakeLockObj.addEventListener('release', () => {
-                console.log("Wake Lock released");
-              });
-              
-              // Re-acquire wake lock when page becomes visible again
-              document.addEventListener('visibilitychange', async () => {
-                if (document.visibilityState === 'visible' && !wakeLockObj) {
-                  try {
-                    wakeLockObj = await navigator.wakeLock.request('screen');
-                    console.log("Wake Lock re-acquired");
-                  } catch (err) {
-                    console.error("Failed to re-acquire Wake Lock:", err);
+        try {
+          if ('wakeLock' in navigator) {
+            console.log('Wake Lock API is supported');
+            
+            // 이미 활성화된 경우 반환
+            if (wakeLockObj) {
+              return;
+            }
+            
+            // 새로운 Wake Lock 요청
+            navigator.wakeLock.request('screen')
+              .then(lock => {
+                wakeLockObj = lock;
+                console.log('Wake Lock is active');
+                
+                // Wake Lock 해제 이벤트 처리
+                lock.addEventListener('release', () => {
+                  console.log('Wake Lock was released');
+                  wakeLockObj = null;
+                  
+                  // 타이머가 계속 실행 중이면 다시 요청
+                  if (timerState.isRunning) {
+                    setTimeout(() => requestWakeLock(), 1000);
                   }
-                }
+                });
+              })
+              .catch(err => {
+                console.error('Wake Lock request failed:', err);
               });
-            }).catch(err => {
-              console.error("Failed to acquire Wake Lock:", err);
-            });
-          } catch (err) {
-            console.error("Wake Lock API error:", err);
+          } else {
+            console.log('Wake Lock API is not supported');
           }
-        } else {
-          console.log("Wake Lock API not supported");
+        } catch(e) {
+          console.error('Wake Lock error:', e);
         }
       }
+      
+      // 백그라운드 타이머 워커 초기화
+      function initTimerWorker() {
+        try {
+          // Web Worker 생성을 위한 Blob URL 생성
+          const workerCode = `
+            let timerId = null;
+            let startTime = 0;
+            let duration = 0;
+            
+            // 타이머 이벤트 처리
+            self.onmessage = function(e) {
+              const data = e.data;
+              
+              switch(data.action) {
+                case 'start':
+                  // 타이머 시작
+                  startTime = Date.now();
+                  duration = data.duration * 1000; // 밀리초로 변환
+                  
+                  // 이전 타이머 정리
+                  if (timerId) {
+                    clearInterval(timerId);
+                  }
+                  
+                  // 새 타이머 시작 (100ms 간격으로 업데이트)
+                  timerId = setInterval(() => {
+                    const elapsed = Date.now() - startTime;
+                    const remaining = Math.max(0, duration - elapsed);
+                    
+                    // 메인 스레드에 남은 시간 전송
+                    self.postMessage({
+                      type: 'tick',
+                      remainingTime: Math.ceil(remaining / 1000) // 초 단위로 변환
+                    });
+                    
+                    // 타이머 완료 확인
+                    if (remaining <= 0) {
+                      clearInterval(timerId);
+                      timerId = null;
+                      self.postMessage({ type: 'complete' });
+                    }
+                  }, 100);
+                  break;
+                  
+                case 'stop':
+                  // 타이머 중지
+                  if (timerId) {
+                    clearInterval(timerId);
+                    timerId = null;
+                  }
+                  break;
+                  
+                case 'get_state':
+                  // 현재 상태 반환
+                  if (timerId) {
+                    const elapsed = Date.now() - startTime;
+                    const remaining = Math.max(0, duration - elapsed);
+                    self.postMessage({
+                      type: 'state',
+                      isRunning: !!timerId,
+                      remainingTime: Math.ceil(remaining / 1000)
+                    });
+                  } else {
+                    self.postMessage({
+                      type: 'state',
+                      isRunning: false,
+                      remainingTime: 0
+                    });
+                  }
+                  break;
+              }
+            };
+          `;
+          
+          const blob = new Blob([workerCode], { type: 'application/javascript' });
+          const workerUrl = URL.createObjectURL(blob);
+          
+          // Web Worker 생성
+          timerWorker = new Worker(workerUrl);
+          
+          // 메시지 수신 처리
+          timerWorker.onmessage = function(e) {
+            const data = e.data;
+            
+            switch(data.type) {
+              case 'tick':
+                // 타이머 틱 이벤트 처리
+                timerState.remainingTime = data.remainingTime;
+                
+                // Flutter에 타이머 업데이트 알림
+                if (window.flutter_inappwebview) {
+                  window.flutter_inappwebview.callHandler('onTimerTick', data.remainingTime);
+                }
+                break;
+                
+              case 'complete':
+                // 타이머 완료 이벤트 처리
+                timerState.isRunning = false;
+                timerState.remainingTime = 0;
+                
+                // 알람 소리 재생
+                playAlarmSound();
+                
+                // Flutter에 타이머 완료 알림
+                if (window.flutter_inappwebview) {
+                  window.flutter_inappwebview.callHandler('onTimerComplete');
+                }
+                break;
+                
+              case 'state':
+                // 상태 업데이트
+                timerState.isRunning = data.isRunning;
+                timerState.remainingTime = data.remainingTime;
+                break;
+            }
+          };
+          
+          console.log("Timer worker initialized");
+        } catch (e) {
+          console.error("Error initializing timer worker:", e);
+        }
+      }
+      
+      // Flutter에서 호출할 수 있는 타이머 제어 함수
+      window.startBackgroundTimer = function(durationSeconds) {
+        if (timerWorker) {
+          timerState.isRunning = true;
+          timerState.duration = durationSeconds;
+          timerState.startTime = Date.now();
+          timerState.remainingTime = durationSeconds;
+          
+          // 워커에 타이머 시작 메시지 전송
+          timerWorker.postMessage({
+            action: 'start',
+            duration: durationSeconds
+          });
+          
+          // 화면 켜짐 유지 요청
+          requestWakeLock();
+          
+          return true;
+        }
+        return false;
+      };
+      
+      window.stopBackgroundTimer = function() {
+        if (timerWorker) {
+          timerState.isRunning = false;
+          
+          // 워커에 타이머 중지 메시지 전송
+          timerWorker.postMessage({ action: 'stop' });
+          
+          // 화면 켜짐 유지 해제
+          if (wakeLockObj) {
+            wakeLockObj.release().catch(e => console.error('Wake Lock release error:', e));
+            wakeLockObj = null;
+          }
+          
+          return true;
+        }
+        return false;
+      };
+      
+      window.getTimerState = function() {
+        if (timerWorker) {
+          // 워커에 상태 요청
+          timerWorker.postMessage({ action: 'get_state' });
+          
+          // 현재 저장된 상태 반환
+          return {
+            isRunning: timerState.isRunning,
+            remainingTime: timerState.remainingTime
+          };
+        }
+        return { isRunning: false, remainingTime: 0 };
+      };
       
       // iOS-specific audio implementation
       window.mobileAudioSystem = {
