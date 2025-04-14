@@ -1,13 +1,36 @@
 {
-    "name": "alarmapp",
-    "short_name": "alarmapp",
+    "name": "알람 타이머 앱",
+    "short_name": "알람앱",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "웹 환경에서 안정적으로 작동하는 알람 타이머 앱",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
+    "gcm_sender_id": "103953800507",
+    "scope": "/alarmapp/",
+    "shortcuts": [
+        {
+            "name": "타이머 시작",
+            "short_name": "타이머",
+            "description": "새 타이머 시작",
+            "url": "/alarmapp/?action=start",
+            "icons": [
+                {
+                    "src": "icons/Icon-192.png",
+                    "sizes": "192x192"
+                }
+            ]
+        }
+    ],
+    "screenshots": [
+        {
+            "src": "icons/screenshot1.png",
+            "sizes": "540x720",
+            "type": "image/png"
+        }
+    ],
     "icons": [
         {
             "src": "icons/Icon-192.png",
@@ -31,5 +54,9 @@
             "type": "image/png",
             "purpose": "maskable"
         }
-    ]
+    ],
+    "related_applications": [],
+    "categories": ["productivity", "utilities"],
+    "lang": "ko-KR",
+    "dir": "ltr"
 }

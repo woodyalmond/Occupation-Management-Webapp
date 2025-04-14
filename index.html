@@ -52,6 +52,7 @@
     let wakeLock = null;
     let timerWorker = null;
     let beepAudio = null;
+    let swRegistration = null;
     
     // 타이머 상태
     let timerState = {
@@ -86,6 +87,21 @@
           console.log("페이지 숨겨짐");
         }
       });
+      
+      // 서비스 워커 등록
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('service-worker.js')
+          .then(function(registration) {
+            console.log('서비스 워커 등록 성공:', registration.scope);
+            swRegistration = registration;
+            
+            // 푸시 알림 권한 요청
+            requestNotificationPermission();
+          })
+          .catch(function(error) {
+            console.error('서비스 워커 등록 실패:', error);
+          });
+      }
     });
     
     // 오디오 초기화 (사용자 상호작용 필요)
@@ -485,8 +501,127 @@
         }
       }
       
+      // 푸시 알림 표시
+      showNotification();
+      
       return playBeep();
     };
+    
+    // 푸시 알림 권한 요청
+    function requestNotificationPermission() {
+      if (!('Notification' in window)) {
+        console.log('이 브라우저는 알림을 지원하지 않습니다.');
+        return;
+      }
+      
+      if (Notification.permission === 'granted') {
+        console.log('알림 권한이 이미 허용되었습니다.');
+        return;
+      }
+      
+      if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then(function(permission) {
+          if (permission === 'granted') {
+            console.log('알림 권한이 허용되었습니다.');
+            
+            // 구독 설정
+            subscribePushNotification();
+          }
+        });
+      }
+    }
+    
+    // 푸시 알림 구독
+    function subscribePushNotification() {
+      if (!swRegistration) {
+        console.error('서비스 워커가 등록되지 않았습니다.');
+        return;
+      }
+      
+      // VAPID 키 (실제 사용 시 서버에서 생성한 공개 키로 대체)
+      const applicationServerPublicKey = 
+        'BLBx-hf2WrL2qEa0qKb-aCJbcxEvyn56-Yt0Fp1CkjwTATYVBXY0ZCKv2lL4VU1xfpTWLTjLVUx9x1ZdBPKVzWo';
+      
+      const applicationServerKey = urlB64ToUint8Array(applicationServerPublicKey);
+      
+      swRegistration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: applicationServerKey
+      })
+      .then(function(subscription) {
+        console.log('푸시 알림 구독 성공:', JSON.stringify(subscription));
+        // 여기서 구독 정보를 서버에 전송하는 코드 추가
+      })
+      .catch(function(error) {
+        console.error('푸시 알림 구독 실패:', error);
+      });
+    }
+    
+    // Base64 URL을 Uint8Array로 변환
+    function urlB64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - base64String.length % 4) % 4);
+      const base64 = (base64String + padding)
+        .replace(/\-/g, '+')
+        .replace(/_/g, '/');
+        
+      const rawData = window.atob(base64);
+      const outputArray = new Uint8Array(rawData.length);
+      
+      for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+      }
+      
+      return outputArray;
+    }
+    
+    // 알림 표시
+    function showNotification() {
+      if (!('Notification' in window)) {
+        console.log('이 브라우저는 알림을 지원하지 않습니다.');
+        return;
+      }
+      
+      if (Notification.permission === 'granted') {
+        // 서비스 워커가 있으면 서비스 워커를 통해 알림 표시
+        if (swRegistration) {
+          const options = {
+            body: '타이머가 완료되었습니다!',
+            icon: 'icons/Icon-192.png',
+            badge: 'icons/Icon-192.png',
+            vibrate: [200, 100, 200, 100, 200],
+            tag: 'alarm-notification',
+            renotify: true,
+            requireInteraction: true,
+            actions: [
+              {
+                action: 'open',
+                title: '앱 열기'
+              },
+              {
+                action: 'close',
+                title: '닫기'
+              }
+            ]
+          };
+          
+          swRegistration.showNotification('알람 타이머', options);
+        } else {
+          // 서비스 워커가 없으면 일반 알림 표시
+          const notification = new Notification('알람 타이머', {
+            body: '타이머가 완료되었습니다!',
+            icon: 'icons/Icon-192.png'
+          });
+          
+          notification.onclick = function() {
+            window.focus();
+            notification.close();
+          };
+        }
+      } else if (Notification.permission !== 'denied') {
+        // 권한이 없으면 권한 요청
+        requestNotificationPermission();
+      }
+    }
   </script>
   
   <script src="flutter_bootstrap.js" async></script>
