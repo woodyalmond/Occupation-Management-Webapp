@@ -108,9 +108,24 @@
       // Setup persistent audio element for iOS background playback
       function setupPersistentAudio() {
         try {
+          // 오디오 요소 생성
           persistentAudioElement = document.createElement('audio');
           persistentAudioElement.id = 'persistent-audio';
-          persistentAudioElement.src = 'assets/assets/sounds/silent.mp3'; 
+          
+          // 오디오 컨텍스트 생성
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const oscillator = audioCtx.createOscillator();
+          const gainNode = audioCtx.createGain();
+          
+          // 무음 설정 (볼륨 0)
+          gainNode.gain.value = 0.0001;
+          
+          // 오실레이터 설정 (매우 낮은 주파수)
+          oscillator.frequency.value = 1;
+          oscillator.connect(gainNode);
+          gainNode.connect(audioCtx.destination);
+          
+          // 오디오 요소 설정
           persistentAudioElement.loop = true;
           persistentAudioElement.preload = 'auto';
           persistentAudioElement.setAttribute('playsinline', '');
@@ -118,16 +133,22 @@
           persistentAudioElement.volume = 0.01; // 최소 볼륨으로 설정
           document.body.appendChild(persistentAudioElement);
           
+          // 오실레이터 시작
+          oscillator.start();
+          
           // iOS에서 자동 재생 방지 정책 우회를 위한 이벤트 리스너
           document.addEventListener('touchstart', function() {
             if (persistentAudioElement && persistentAudioElement.paused) {
-              persistentAudioElement.play().catch(e => console.log('Silent audio play failed:', e));
+              // 사용자 상호작용으로 오디오 컨텍스트 재개
+              if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+              }
               
-              // 30초마다 오디오 재생을 갱신하여 백그라운드 재생 유지
+              // 30초마다 오디오 컨텍스트 재개하여 백그라운드 재생 유지
               if (!silentAudioInterval) {
                 silentAudioInterval = setInterval(() => {
-                  if (persistentAudioElement.paused) {
-                    persistentAudioElement.play().catch(e => console.log('Silent audio refresh failed:', e));
+                  if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
                   }
                 }, 30000);
               }
