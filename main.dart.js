@@ -38110,8 +38110,8 @@ return A.G($async$CP,r)},
 Cu(){var s=0,r=A.H(t.H),q,p,o
 var $async$Cu=A.I(function(a,b){if(a===1)return A.E(b,r)
 while(true)switch(s){case 0:try{A.dh().$1("\uc6f9 \ud658\uacbd\uc5d0\uc11c \uc54c\ub78c \uc18c\ub9ac \uc7ac\uc0dd \uc2dc\ub3c4")
-q=globalThis.eval("          (function() {\n            try {\n              // \uc624\ub514\uc624 \uc2dc\uc2a4\ud15c \ucd08\uae30\ud654 \ud655\uc778\n              if (typeof initializeAudio === 'function') {\n                if (!initializeAudio()) {\n                  console.error(\"Failed to initialize audio system\");\n                  return false;\n                }\n              }\n              \n              // \uc54c\ub78c \uc18c\ub9ac \uc7ac\uc0dd\n              if (typeof window.playAlarmSound === 'function') {\n                return window.playAlarmSound();\n              } else {\n                console.error(\"playAlarmSound function not found\");\n                return false;\n              }\n            } catch(e) {\n              console.error('Web audio play error:', e);\n              return false;\n            }\n          })();\n        ")
-A.dh().$1("\uc6f9 \uc624\ub514\uc624 \uc7ac\uc0dd \uacb0\uacfc: "+A.k(q))}catch(n){p=A.a6(n)
+q=globalThis.playAlarmSound()
+A.dh().$1("\uc54c\ub78c \uc18c\ub9ac \uc7ac\uc0dd \uacb0\uacfc: "+A.k(q))}catch(n){p=A.a6(n)
 A.dh().$1("\uc54c\ub78c \uc18c\ub9ac \uc7ac\uc0dd \uc624\ub958: "+A.k(p))}return A.F(null,r)}})
 return A.G($async$Cu,r)},
 z6(a){return this.alG(a)},

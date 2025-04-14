@@ -41,968 +41,425 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
-  <!-- Audio implementation with Safari support -->
+  <!-- 오디오 요소 미리 생성 -->
+  <audio id="beep-sound" preload="auto" src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA" style="display:none"></audio>
+  
+  <!-- 간소화된 오디오 시스템 -->
   <script>
-    // Global variables for audio context
-    let audioContext = null;
-    let audioInitialized = false;
-    let unlocked = false;
-    let mediaSessionActive = false;
-    let persistentAudioElement = null;
-    let silentAudioInterval = null;
-    let vibrationActive = false;
-    let wakeLockObj = null;
+    // 전역 변수
+    let audioCtx = null;
+    let gainNode = null;
+    let wakeLock = null;
     let timerWorker = null;
-    let lastAudioPlayTime = 0;
-    let audioPlayAttempts = 0;
-    let maxAudioPlayAttempts = 3;
+    let beepAudio = null;
     
-    // 타이머 상태 저장 변수
+    // 타이머 상태
     let timerState = {
       isRunning: false,
       startTime: 0,
       duration: 0,
-      remainingTime: 0,
-      timerId: null
+      remainingTime: 0
     };
-
-    // Init function to run on page load
+    
+    // 문서 로드 완료 시 실행
     document.addEventListener('DOMContentLoaded', function() {
-      console.log("DOM loaded, setting up audio system");
+      console.log("문서 로드 완료");
       
-      // 지속적인 오디오 요소 생성 (iOS 백그라운드 재생용)
-      setupPersistentAudio();
+      // 오디오 요소 참조
+      beepAudio = document.getElementById('beep-sound');
       
-      // 백그라운드 타이머 워커 초기화
-      initTimerWorker();
-      
-      // Add touch/click listeners to unlock audio on all user interactions
-      const unlockEvents = ['touchstart', 'touchend', 'mousedown', 'keydown'];
-      unlockEvents.forEach(event => {
-        document.body.addEventListener(event, unlockAudio, { once: true });
+      // 사용자 상호작용 이벤트 리스너 등록
+      const events = ['touchstart', 'mousedown', 'keydown'];
+      events.forEach(event => {
+        document.body.addEventListener(event, initAudio, { once: false });
       });
       
-      // 오디오 초기화 및 잠금 해제 함수 (개선된 버전)
-      function initializeAudio() {
+      // 백그라운드 타이머 초기화
+      initBackgroundTimer();
+      
+      // 페이지 가시성 변경 이벤트 처리
+      document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'visible') {
+          console.log("페이지 보임");
+          initAudio();
+        } else {
+          console.log("페이지 숨겨짐");
+        }
+      });
+    });
+    
+    // 오디오 초기화 (사용자 상호작용 필요)
+    function initAudio() {
+      console.log("오디오 초기화 시도");
+      
+      // 이미 초기화되었는지 확인
+      if (audioCtx) {
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume().then(() => {
+            console.log("오디오 컨텍스트 재개됨");
+          }).catch(err => {
+            console.error("오디오 컨텍스트 재개 실패:", err);
+          });
+        }
+        return;
+      }
+      
+      try {
+        // 오디오 컨텍스트 생성
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        console.log("오디오 컨텍스트 생성됨:", audioCtx.state);
+        
+        // 게인 노드 생성
+        gainNode = audioCtx.createGain();
+        gainNode.connect(audioCtx.destination);
+        
+        // 무음 소리로 오디오 시스템 잠금 해제
+        const silentBuffer = audioCtx.createBuffer(1, 1, 22050);
+        const source = audioCtx.createBufferSource();
+        source.buffer = silentBuffer;
+        source.connect(audioCtx.destination);
+        source.start(0);
+        
+        // Wake Lock 요청 (가능한 경우)
+        requestWakeLock();
+        
+        console.log("오디오 초기화 완료");
+      } catch (err) {
+        console.error("오디오 초기화 실패:", err);
+      }
+    }
+    
+    // Wake Lock 요청 (화면 꺼짐 방지)
+    async function requestWakeLock() {
+      if ('wakeLock' in navigator) {
         try {
-          // 이미 초기화되었는지 확인
-          if (audioInitialized && audioContext && audioContext.state === 'running') {
-            console.log("Audio already initialized and running");
-            return true;
-          }
+          wakeLock = await navigator.wakeLock.request('screen');
+          console.log("Wake Lock 활성화됨");
           
-          console.log("Initializing audio system...");
-          
-          // AudioContext 생성
-          try {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            console.log("AudioContext created, state:", audioContext.state);
-          } catch (e) {
-            console.error("Failed to create AudioContext:", e);
-            return false;
-          }
-          
-          // AudioContext 상태 확인 및 재개
-          if (audioContext.state === 'suspended') {
-            try {
-              audioContext.resume();
-              console.log("AudioContext resumed");
-            } catch (e) {
-              console.error("Failed to resume AudioContext:", e);
+          wakeLock.addEventListener('release', () => {
+            console.log("Wake Lock 해제됨");
+            wakeLock = null;
+            
+            // 타이머 실행 중이면 다시 요청
+            if (timerState.isRunning) {
+              requestWakeLock();
             }
-          }
-          
-          // 무음 사운드로 오디오 시스템 잠금 해제
-          try {
-            const silentBuffer = audioContext.createBuffer(1, 1, 22050);
-            const source = audioContext.createBufferSource();
-            source.buffer = silentBuffer;
-            source.connect(audioContext.destination);
-            source.start(0);
-            source.stop(0.001);
-            console.log("Silent sound played to unlock audio");
-          } catch (e) {
-            console.error("Failed to play silent sound:", e);
-          }
-          
-          // 지속적인 오디오 요소 설정
-          if (!persistentAudioElement) {
-            try {
-              persistentAudioElement = document.createElement('audio');
-              persistentAudioElement.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
-              persistentAudioElement.loop = true;
-              persistentAudioElement.volume = 0.01;
-              persistentAudioElement.setAttribute('playsinline', '');
-              persistentAudioElement.setAttribute('webkit-playsinline', '');
-              document.body.appendChild(persistentAudioElement);
-              console.log("Persistent audio element created");
-            } catch (e) {
-              console.error("Failed to create persistent audio element:", e);
-            }
-          }
-          
-          // 미디어 세션 설정
-          if ('mediaSession' in navigator && !mediaSessionActive) {
-            try {
-              navigator.mediaSession.metadata = new MediaMetadata({
-                title: 'AlarmApp',
-                artist: 'Background Timer',
-                album: 'Timer Sounds',
-                artwork: [{ src: 'icons/Icon-192.png', sizes: '192x192', type: 'image/png' }]
-              });
-              
-              navigator.mediaSession.setActionHandler('play', () => {
-                console.log("Media session play action");
-              });
-              
-              navigator.mediaSession.setActionHandler('pause', () => {
-                console.log("Media session pause action");
-              });
-              
-              mediaSessionActive = true;
-              console.log("Media session initialized");
-            } catch (e) {
-              console.error("Failed to initialize media session:", e);
-            }
-          }
-          
-          // Wake Lock 요청
-          requestWakeLock();
-          
-          audioInitialized = true;
-          unlocked = true;
-          console.log("Audio system fully initialized");
-          return true;
-        } catch (e) {
-          console.error("Audio initialization failed:", e);
+          });
+        } catch (err) {
+          console.error("Wake Lock 요청 실패:", err);
+        }
+      } else {
+        console.log("Wake Lock API 지원되지 않음");
+      }
+    }
+    
+    // 비프음 재생 (Web Audio API 사용)
+    function playBeep() {
+      console.log("비프음 재생 시도");
+      
+      // 진동 API 사용 (가능한 경우)
+      if ('vibrate' in navigator) {
+        navigator.vibrate([200, 100, 200]);
+        console.log("진동 활성화");
+      }
+      
+      // 오디오 컨텍스트 확인
+      if (!audioCtx) {
+        initAudio();
+        
+        // 초기화 후에도 없으면 실패
+        if (!audioCtx) {
+          console.error("오디오 컨텍스트 없음");
           return false;
         }
       }
       
-      // Function to initialize and unlock audio
-      function unlockAudio() {
-        if (unlocked) return;
-        console.log("User interaction detected! Unlocking audio...");
+      // 오디오 컨텍스트 상태 확인
+      if (audioCtx.state === 'suspended') {
+        try {
+          audioCtx.resume();
+        } catch (err) {
+          console.error("오디오 컨텍스트 재개 실패:", err);
+        }
+      }
+      
+      try {
+        // 첫 번째 비프음 생성
+        const osc1 = audioCtx.createOscillator();
+        osc1.type = 'square';
+        osc1.frequency.value = 800;
         
+        // 게인 노드 설정
+        gainNode.gain.value = 0.5;
+        
+        // 연결 및 재생
+        osc1.connect(gainNode);
+        osc1.start();
+        
+        // 첫 번째 비프음 정지 및 두 번째 비프음 재생
+        setTimeout(() => {
+          osc1.stop();
+          
+          // 두 번째 비프음
+          setTimeout(() => {
+            const osc2 = audioCtx.createOscillator();
+            osc2.type = 'square';
+            osc2.frequency.value = 600;
+            osc2.connect(gainNode);
+            osc2.start();
+            
+            setTimeout(() => {
+              osc2.stop();
+            }, 200);
+          }, 200);
+        }, 200);
+        
+        console.log("비프음 재생 성공");
+        return true;
+      } catch (err) {
+        console.error("비프음 재생 실패:", err);
+        
+        // 대체 방법: HTML Audio 요소 사용
         try {
-          // 오디오 초기화 및 잠금 해제
-          if (!initializeAudio()) {
-            console.error("Failed to initialize audio system");
-          }
-          
-          // Remove event listeners once unlocked
-          unlockEvents.forEach(event => {
-            document.body.removeEventListener(event, unlockAudio);
-          });
-          
-          console.log("Audio system unlocked successfully!");
-        } catch (e) {
-          console.error("Error initializing audio:", e);
+          beepAudio.currentTime = 0;
+          beepAudio.play();
+          console.log("대체 오디오 재생");
+        } catch (audioErr) {
+          console.error("대체 오디오 재생 실패:", audioErr);
         }
+        
+        return false;
       }
+    }
+    
+    // 백그라운드 타이머 초기화
+    function initBackgroundTimer() {
+      console.log("백그라운드 타이머 초기화");
       
-      // Setup persistent audio element for iOS background playback
-      function setupPersistentAudio() {
-        try {
-          // 오디오 요소 생성
-          persistentAudioElement = document.createElement('audio');
-          persistentAudioElement.id = 'persistent-audio';
+      // 워커 코드
+      const workerCode = `
+        // 타이머 변수
+        let timerId = null;
+        let startTime = 0;
+        let duration = 0;
+        let isRunning = false;
+        
+        // 메시지 처리
+        self.onmessage = function(e) {
+          const data = e.data;
           
-          // 오디오 컨텍스트 생성
-          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-          const oscillator = audioCtx.createOscillator();
-          const gainNode = audioCtx.createGain();
-          
-          // 무음 설정 (볼륨 0)
-          gainNode.gain.value = 0.0001;
-          
-          // 오실레이터 설정 (매우 낮은 주파수)
-          oscillator.frequency.value = 1;
-          oscillator.connect(gainNode);
-          gainNode.connect(audioCtx.destination);
-          
-          // 오디오 요소 설정
-          persistentAudioElement.loop = true;
-          persistentAudioElement.preload = 'auto';
-          persistentAudioElement.setAttribute('playsinline', '');
-          persistentAudioElement.setAttribute('webkit-playsinline', '');
-          persistentAudioElement.volume = 0.01; // 최소 볼륨으로 설정
-          document.body.appendChild(persistentAudioElement);
-          
-          // 오실레이터 시작
-          oscillator.start();
-          
-          // iOS에서 자동 재생 방지 정책 우회를 위한 이벤트 리스너
-          document.addEventListener('touchstart', function() {
-            if (persistentAudioElement && persistentAudioElement.paused) {
-              // 사용자 상호작용으로 오디오 컨텍스트 재개
-              if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-              }
+          switch(data.action) {
+            case 'start':
+              // 타이머 시작
+              startTime = Date.now();
+              duration = data.duration * 1000;
+              isRunning = true;
               
-              // 30초마다 오디오 컨텍스트 재개하여 백그라운드 재생 유지
-              if (!silentAudioInterval) {
-                silentAudioInterval = setInterval(() => {
-                  if (audioCtx.state === 'suspended') {
-                    audioCtx.resume();
-                  }
-                }, 30000);
-              }
-            }
-          }, { once: true });
-          
-          console.log("Persistent audio element setup complete");
-        } catch (e) {
-          console.error("Error setting up persistent audio:", e);
-        }
-      }
-      
-      // Setup Media Session API for background playback
-      function setupMediaSession() {
-        if ('mediaSession' in navigator) {
-          console.log("Setting up Media Session API");
-          
-          navigator.mediaSession.metadata = new MediaMetadata({
-            title: 'AlarmApp',
-            artist: 'Background Audio',
-            album: 'Alarm Sounds',
-            artwork: [
-              { src: 'icons/Icon-192.png', sizes: '192x192', type: 'image/png' }
-            ]
-          });
-          
-          // iOS에서 백그라운드 재생 유지를 위한 미디어 세션 설정
-          navigator.mediaSession.setActionHandler('play', function() {
-            console.log("Media Session: play action triggered");
-            if (persistentAudioElement && persistentAudioElement.paused) {
-              persistentAudioElement.play().catch(e => console.log('Media session play failed:', e));
-            }
-          });
-          
-          navigator.mediaSession.setActionHandler('pause', function() {
-            console.log("Media Session: pause action triggered");
-            // 알람 앱이므로 일시정지 처리하지 않음 (백그라운드 재생 유지)
-          });
-          
-          mediaSessionActive = true;
-          console.log("Media Session API setup complete");
-        } else {
-          console.log("Media Session API not supported");
-        }
-      }
-      
-      // Wake Lock API 요청 함수
-      function requestWakeLock() {
-        try {
-          if ('wakeLock' in navigator) {
-            console.log('Wake Lock API is supported');
-            
-            // 이미 활성화된 경우 반환
-            if (wakeLockObj) {
-              return;
-            }
-            
-            // 새로운 Wake Lock 요청
-            navigator.wakeLock.request('screen')
-              .then(lock => {
-                wakeLockObj = lock;
-                console.log('Wake Lock is active');
+              // 이전 타이머 정리
+              if (timerId) clearInterval(timerId);
+              
+              // 새 타이머 시작
+              timerId = setInterval(() => {
+                if (!isRunning) return;
                 
-                // Wake Lock 해제 이벤트 처리
-                lock.addEventListener('release', () => {
-                  console.log('Wake Lock was released');
-                  wakeLockObj = null;
-                  
-                  // 타이머가 계속 실행 중이면 다시 요청
-                  if (timerState.isRunning) {
-                    setTimeout(() => requestWakeLock(), 1000);
-                  }
-                });
-              })
-              .catch(err => {
-                console.error('Wake Lock request failed:', err);
-              });
-          } else {
-            console.log('Wake Lock API is not supported');
-          }
-        } catch(e) {
-          console.error('Wake Lock error:', e);
-        }
-      }
-      
-      // 백그라운드 타이머 워커 초기화
-      function initTimerWorker() {
-        try {
-          // Web Worker 생성을 위한 Blob URL 생성
-          const workerCode = `
-            let timerId = null;
-            let startTime = 0;
-            let duration = 0;
-            let lastTickTime = 0;
-            let isRunning = false;
-            
-            // 타이머 이벤트 처리
-            self.onmessage = function(e) {
-              const data = e.data;
-              
-              switch(data.action) {
-                case 'start':
-                  // 타이머 시작
-                  startTime = Date.now();
-                  duration = data.duration * 1000; // 밀리초로 변환
-                  isRunning = true;
-                  
-                  // 이전 타이머 정리
-                  if (timerId) {
-                    clearInterval(timerId);
-                  }
-                  
-                  // 새 타이머 시작 (100ms 간격으로 업데이트)
-                  timerId = setInterval(() => {
-                    if (!isRunning) return;
-                    
-                    const now = Date.now();
-                    // 마지막 틱으로부터 최소 500ms가 지났을 때만 업데이트 (성능 최적화)
-                    if (now - lastTickTime >= 500) {
-                      const elapsed = now - startTime;
-                      const remaining = Math.max(0, duration - elapsed);
-                      
-                      // 메인 스레드에 남은 시간 전송
-                      self.postMessage({
-                        type: 'tick',
-                        remainingTime: Math.ceil(remaining / 1000), // 초 단위로 변환
-                        timestamp: now
-                      });
-                      
-                      lastTickTime = now;
-                      
-                      // 타이머 완료 확인
-                      if (remaining <= 0) {
-                        clearInterval(timerId);
-                        timerId = null;
-                        isRunning = false;
-                        self.postMessage({ 
-                          type: 'complete',
-                          timestamp: now
-                        });
-                      }
-                    }
-                  }, 100);
-                  break;
-                  
-                case 'stop':
-                  // 타이머 중지
-                  isRunning = false;
-                  if (timerId) {
-                    clearInterval(timerId);
-                    timerId = null;
-                  }
-                  break;
-                  
-                case 'get_state':
-                  // 현재 상태 반환
-                  const now = Date.now();
-                  if (isRunning) {
-                    const elapsed = now - startTime;
-                    const remaining = Math.max(0, duration - elapsed);
-                    self.postMessage({
-                      type: 'state',
-                      isRunning: true,
-                      remainingTime: Math.ceil(remaining / 1000),
-                      timestamp: now
-                    });
-                  } else {
-                    self.postMessage({
-                      type: 'state',
-                      isRunning: false,
-                      remainingTime: 0,
-                      timestamp: now
-                    });
-                  }
-                  break;
-                  
-                case 'ping':
-                  // 워커가 살아있는지 확인
-                  self.postMessage({
-                    type: 'pong',
-                    timestamp: Date.now()
-                  });
-                  break;
-              }
-            };
-            
-            // 주기적으로 상태 업데이트 (백그라운드에서도 계속 작동하도록)
-            setInterval(() => {
-              if (isRunning) {
                 const now = Date.now();
                 const elapsed = now - startTime;
                 const remaining = Math.max(0, duration - elapsed);
                 
+                // 메인 스레드에 상태 전송
+                self.postMessage({
+                  type: 'tick',
+                  remainingTime: Math.ceil(remaining / 1000)
+                });
+                
+                // 타이머 완료 확인
                 if (remaining <= 0) {
                   clearInterval(timerId);
                   timerId = null;
                   isRunning = false;
-                  self.postMessage({ 
-                    type: 'complete',
-                    timestamp: now
-                  });
+                  self.postMessage({ type: 'complete' });
                 }
+              }, 500);
+              break;
+              
+            case 'stop':
+              // 타이머 중지
+              isRunning = false;
+              if (timerId) {
+                clearInterval(timerId);
+                timerId = null;
               }
-            }, 1000);
-          `;
-          
-          const blob = new Blob([workerCode], { type: 'application/javascript' });
-          const workerUrl = URL.createObjectURL(blob);
-          
-          // Web Worker 생성
-          timerWorker = new Worker(workerUrl);
-          
-          // 메시지 수신 처리
-          timerWorker.onmessage = function(e) {
-            const data = e.data;
-            
-            switch(data.type) {
-              case 'tick':
-                // 타이머 틱 이벤트 처리
-                timerState.remainingTime = data.remainingTime;
-                
-                // Flutter에 타이머 업데이트 알림
-                if (window.flutter_inappwebview) {
-                  window.flutter_inappwebview.callHandler('onTimerTick', data.remainingTime);
-                }
-                break;
-                
-              case 'complete':
-                // 타이머 완료 이벤트 처리
-                timerState.isRunning = false;
-                timerState.remainingTime = 0;
-                
-                // 알람 소리 재생
-                playAlarmSound();
-                
-                // Flutter에 타이머 완료 알림
-                if (window.flutter_inappwebview) {
-                  window.flutter_inappwebview.callHandler('onTimerComplete');
-                }
-                break;
-                
-              case 'state':
-                // 상태 업데이트
-                timerState.isRunning = data.isRunning;
-                timerState.remainingTime = data.remainingTime;
-                break;
-                
-              case 'pong':
-                // 워커가 살아있는지 확인
-                console.log('Worker is alive');
-                break;
-            }
-          };
-          
-          console.log("Timer worker initialized");
-        } catch (e) {
-          console.error("Error initializing timer worker:", e);
-        }
-      }
-      
-      // Flutter에서 호출할 수 있는 타이머 제어 함수
-      window.startBackgroundTimer = function(durationSeconds) {
-        if (timerWorker) {
-          timerState.isRunning = true;
-          timerState.duration = durationSeconds;
-          timerState.startTime = Date.now();
-          timerState.remainingTime = durationSeconds;
-          
-          // 워커에 타이머 시작 메시지 전송
-          timerWorker.postMessage({
-            action: 'start',
-            duration: durationSeconds
-          });
-          
-          // 화면 켜짐 유지 요청
-          requestWakeLock();
-          
-          return true;
-        }
-        return false;
-      };
-      
-      window.stopBackgroundTimer = function() {
-        if (timerWorker) {
-          timerState.isRunning = false;
-          
-          // 워커에 타이머 중지 메시지 전송
-          timerWorker.postMessage({ action: 'stop' });
-          
-          // 화면 켜짐 유지 해제
-          if (wakeLockObj) {
-            wakeLockObj.release().catch(e => console.error('Wake Lock release error:', e));
-            wakeLockObj = null;
-          }
-          
-          return true;
-        }
-        return false;
-      };
-      
-      window.getTimerState = function() {
-        if (timerWorker) {
-          // 워커에 상태 요청
-          timerWorker.postMessage({ action: 'get_state' });
-          
-          // 현재 저장된 상태 반환
-          return {
-            isRunning: timerState.isRunning,
-            remainingTime: timerState.remainingTime
-          };
-        }
-        return { isRunning: false, remainingTime: 0 };
-      };
-      
-      // Flutter에서 호출할 수 있는 글로벌 함수 등록 (완전히 개선된 버전)
-      window.playAlarmSound = function() {
-        console.log("playAlarmSound called from Flutter");
-        
-        // 재생 시도 횟수 제한
-        if (Date.now() - lastAudioPlayTime < 1000) {
-          audioPlayAttempts++;
-          if (audioPlayAttempts > maxAudioPlayAttempts) {
-            console.warn("Too many audio play attempts in short time, ignoring");
-            setTimeout(() => { audioPlayAttempts = 0; }, 3000);
-            return false;
-          }
-        } else {
-          audioPlayAttempts = 1;
-        }
-        
-        lastAudioPlayTime = Date.now();
-        
-        try {
-          // 오디오 시스템 초기화 확인
-          if (!audioInitialized) {
-            if (!initializeAudio()) {
-              console.error("Failed to initialize audio system");
-              return false;
-            }
-          }
-          
-          // 진동 API 사용 시도 (모바일 기기)
-          if ('vibrate' in navigator) {
-            try {
-              navigator.vibrate([200, 100, 200]);
-              console.log('Vibration activated');
-            } catch (e) {
-              console.error("Vibration failed:", e);
-            }
-          }
-          
-          // 지속적인 오디오 재생 확인 (iOS 백그라운드 재생용)
-          if (persistentAudioElement && persistentAudioElement.paused) {
-            try {
-              const playPromise = persistentAudioElement.play();
-              // Promise 지원 확인 (안전한 방식)
-              if (playPromise && typeof playPromise.then === 'function') {
-                playPromise.catch(e => {
-                  console.warn("Failed to play persistent audio:", e);
+              break;
+              
+            case 'get_state':
+              // 상태 반환
+              if (isRunning) {
+                const now = Date.now();
+                const elapsed = now - startTime;
+                const remaining = Math.max(0, duration - elapsed);
+                self.postMessage({
+                  type: 'state',
+                  isRunning: true,
+                  remainingTime: Math.ceil(remaining / 1000)
+                });
+              } else {
+                self.postMessage({
+                  type: 'state',
+                  isRunning: false,
+                  remainingTime: 0
                 });
               }
-            } catch (e) {
-              console.warn("Error playing persistent audio:", e);
+              break;
+          }
+        };
+        
+        // 주기적 상태 확인 (백그라운드 작동 보장)
+        setInterval(() => {
+          if (isRunning) {
+            const now = Date.now();
+            const elapsed = now - startTime;
+            const remaining = Math.max(0, duration - elapsed);
+            
+            if (remaining <= 0) {
+              clearInterval(timerId);
+              timerId = null;
+              isRunning = false;
+              self.postMessage({ type: 'complete' });
             }
           }
-          
-          // AudioContext 확인 및 재생성 (필요시)
-          if (!audioContext || audioContext.state === 'closed') {
-            try {
-              audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            } catch (e) {
-              console.error("Failed to create AudioContext:", e);
-              return false;
-            }
-          }
-          
-          // AudioContext 상태 확인 및 재개
-          if (audioContext.state === 'suspended') {
-            try {
-              audioContext.resume();
-            } catch (e) {
-              console.error("Failed to resume AudioContext:", e);
-            }
-          }
-          
-          // 비프음 생성 및 재생
-          try {
-            // 게인 노드 생성
-            const gainNode = audioContext.createGain();
-            gainNode.gain.value = 0.5;
-            gainNode.connect(audioContext.destination);
-            
-            // 첫 번째 비프음
-            const oscillator1 = audioContext.createOscillator();
-            oscillator1.type = 'square';
-            oscillator1.frequency.value = 800;
-            oscillator1.connect(gainNode);
-            
-            // 안전한 시작/정지 처리
-            let oscillator1Started = false;
-            try {
-              oscillator1.start(0);
-              oscillator1Started = true;
-              console.log("First beep started");
-            } catch (e) {
-              console.error("Failed to start first oscillator:", e);
-              return false;
-            }
-            
-            // 첫 번째 비프음 정지 및 두 번째 비프음 시작
-            setTimeout(function() {
-              if (oscillator1Started) {
-                try {
-                  oscillator1.stop();
-                  console.log("First beep stopped");
-                } catch (e) {
-                  console.error("Failed to stop first oscillator:", e);
-                }
-              }
-              
-              // 두 번째 비프음 (0.2초 후)
-              setTimeout(function() {
-                try {
-                  // 두 번째 오실레이터 생성
-                  const oscillator2 = audioContext.createOscillator();
-                  oscillator2.type = 'square';
-                  oscillator2.frequency.value = 600;
-                  oscillator2.connect(gainNode);
-                  oscillator2.start();
-                  setTimeout(() => {
-                    oscillator2.stop();
-                  }, 200);
-                } catch (e) {
-                  console.error("Error playing second beep:", e);
-                }
-              }, 200);
-            }, 200);
-            
-            console.log("Alarm sound sequence started successfully");
-            return true;
-          } catch (e) {
-            console.error("Failed to create audio components:", e);
-            return false;
-          }
-        } catch (e) {
-          console.error("Error playing alarm sound:", e);
-          return false;
-        }
-      };
+        }, 1000);
+      `;
       
-      // iOS-specific audio implementation
-      window.mobileAudioSystem = {
-        initialized: false,
-        soundElement: null,
-        audioContext: null,
-        vibrationPattern: [100, 30, 100, 30, 100],
+      try {
+        // 워커 생성
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        timerWorker = new Worker(workerUrl);
         
-        // Initialize the iOS audio system with preloaded sound
-        init: function() {
-          try {
-            if (this.initialized) return;
-            
-            console.log("Initializing mobile audio system");
-            
-            // Create audio context for Web Audio API
-            try {
-              this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-              console.log("Mobile audio context created:", this.audioContext.state);
-            } catch (e) {
-              console.error("Failed to create audio context:", e);
-            }
-            
-            // Create audio element for HTML5 Audio
-            try {
-              this.soundElement = document.createElement('audio');
-              this.soundElement.src = 'assets/assets/sounds/alarm_sound.wav';
-              this.soundElement.load();
-              document.body.appendChild(this.soundElement);
-              console.log("Audio element created and loaded");
-            } catch (e) {
-              console.error("Failed to create audio element:", e);
-              this.soundElement = null;
-            }
-            
-            this.initialized = true;
-            console.log("Mobile audio system initialized");
-          } catch (e) {
-            console.error("Mobile audio init error:", e);
+        // 메시지 처리
+        timerWorker.onmessage = function(e) {
+          const data = e.data;
+          
+          switch(data.type) {
+            case 'tick':
+              // 타이머 틱
+              timerState.remainingTime = data.remainingTime;
+              
+              // Flutter에 알림 (가능한 경우)
+              if (window.flutter_inappwebview) {
+                window.flutter_inappwebview.callHandler('onTimerTick', data.remainingTime);
+              }
+              break;
+              
+            case 'complete':
+              // 타이머 완료
+              timerState.isRunning = false;
+              timerState.remainingTime = 0;
+              
+              // 알람 소리 재생
+              playBeep();
+              
+              // Flutter에 알림 (가능한 경우)
+              if (window.flutter_inappwebview) {
+                window.flutter_inappwebview.callHandler('onTimerComplete');
+              }
+              break;
+              
+            case 'state':
+              // 상태 업데이트
+              timerState.isRunning = data.isRunning;
+              timerState.remainingTime = data.remainingTime;
+              break;
           }
-        },
+        };
         
-        // Handle user interaction to unlock audio
-        handleInteraction: function() {
-          try {
-            if (!this.initialized) {
-              this.init();
-            }
-            
-            console.log("User interaction detected in mobile audio system");
-            
-            // Resume audio context if suspended
-            if (this.audioContext && this.audioContext.state === 'suspended') {
-              this.audioContext.resume().then(() => {
-                console.log("Mobile audio context resumed");
-              }).catch(e => {
-                console.error("Failed to resume audio context:", e);
-              });
-            }
-            
-            // Try to play a silent sound to unlock audio
-            this.unlockAudio();
-          } catch (e) {
-            console.error("Handle interaction error:", e);
-          }
-        },
-        
-        // Setup audio unlock for iOS Safari
-        unlockAudio: function() {
-          try {
-            // Try to play a silent sound with the audio element
-            if (this.soundElement) {
-              this.soundElement.volume = 0.01;
-              
-              try {
-                // 직접 play 호출 (Promise 처리 없이)
-                this.soundElement.play();
-                
-                // 짧은 시간 후 일시 정지
-                setTimeout(() => {
-                  try {
-                    this.soundElement.pause();
-                    console.log("Audio unlocked successfully");
-                  } catch (e) {
-                    console.error("Error pausing audio:", e);
-                  }
-                }, 10);
-              } catch (e) {
-                console.error("Error in unlock audio play:", e);
-              }
-            }
-            
-            // Also try to unlock Web Audio API
-            if (this.audioContext) {
-              try {
-                const oscillator = this.audioContext.createOscillator();
-                const gainNode = this.audioContext.createGain();
-                
-                gainNode.gain.value = 0.001; // Nearly silent
-                oscillator.connect(gainNode);
-                gainNode.connect(this.audioContext.destination);
-                
-                oscillator.start(0);
-                oscillator.stop(0.001);
-              } catch (e) {
-                console.error("Error unlocking Web Audio API:", e);
-              }
-            }
-          } catch (e) {
-            console.error("Unlock audio error:", e);
-          }
-        },
-        
-        // Play beep using the mobile audio system
-        playBeep: function() {
-          try {
-            console.log("Mobile beep requested");
-            
-            if (!this.initialized) {
-              this.init();
-            }
-            
-            // 진동 지원 및 활성화된 경우 진동 실행 (무음 모드에서 대체용)
-            if ('vibrate' in navigator) {
-              navigator.vibrate(this.vibrationPattern);
-              console.log("Vibration triggered");
-            }
-            
-            // 지속적인 오디오가 재생 중인지 확인하고 필요시 재시작
-            if (persistentAudioElement && persistentAudioElement.paused) {
-              try {
-                persistentAudioElement.play();
-              } catch (e) {
-                console.log('Failed to restart persistent audio:', e);
-              }
-            }
-            
-            // Web Audio API를 사용하여 직접 비프음 생성 (가장 안정적인 방법)
-            this.playFallbackBeep();
-          } catch (e) {
-            console.error("Beep playback failed:", e);
-          }
-        },
-        
-        // Fallback beep using Web Audio API
-        playFallbackBeep: function() {
-          try {
-            console.log("Beep sound function called (fallback)");
-            
-            if (!this.audioContext) {
-              try {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-              } catch (e) {
-                console.error("Failed to create audio context:", e);
-                return;
-              }
-            }
-            
-            if (this.audioContext.state === 'suspended') {
-              try {
-                this.audioContext.resume();
-              } catch (e) {
-                console.error("Failed to resume audio context:", e);
-              }
-            }
-            
-            try {
-              const oscillator = this.audioContext.createOscillator();
-              const gainNode = this.audioContext.createGain();
-              
-              oscillator.type = 'square';
-              oscillator.frequency.value = 800;
-              gainNode.gain.value = 0.5;
-              
-              oscillator.connect(gainNode);
-              gainNode.connect(this.audioContext.destination);
-              
-              oscillator.start();
-              setTimeout(() => {
-                oscillator.stop();
-                
-                // 두 번째 비프음
-                setTimeout(() => {
-                  try {
-                    const oscillator2 = this.audioContext.createOscillator();
-                    oscillator2.type = 'square';
-                    oscillator2.frequency.value = 600;
-                    oscillator2.connect(gainNode);
-                    oscillator2.start();
-                    setTimeout(() => {
-                      oscillator2.stop();
-                    }, 200);
-                  } catch (e) {
-                    console.error("Error playing second beep:", e);
-                  }
-                }, 200);
-              }, 200);
-              
-              console.log("Fallback beep played successfully");
-            } catch (e) {
-              console.error("Error playing fallback beep:", e);
-            }
-          } catch (e) {
-            console.error("Fallback beep function error:", e);
-          }
-        }
-      };
+        console.log("백그라운드 타이머 초기화 완료");
+      } catch (err) {
+        console.error("백그라운드 타이머 초기화 실패:", err);
+      }
+    }
+    
+    // Flutter에서 호출할 함수들
+    
+    // 타이머 시작
+    window.startBackgroundTimer = function(durationSeconds) {
+      console.log("타이머 시작:", durationSeconds);
       
-      // Auto-detect iOS and initialize audio system
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-      if (isIOS) {
-        console.log("iOS device detected - initializing mobile audio system");
-        window.mobileAudioSystem.init();
-        
-        // Add special handling for iOS
-        document.body.addEventListener('click', function() {
-          window.mobileAudioSystem.handleInteraction();
-        });
-        
-        // iOS에서 화면 잠금 방지를 위한 추가 처리
-        document.addEventListener('visibilitychange', function() {
-          if (document.visibilityState === 'hidden') {
-            // 화면이 백그라운드로 갈 때 오디오 재생 유지
-            if (persistentAudioElement && persistentAudioElement.paused) {
-              persistentAudioElement.play().catch(e => console.log('Background audio play failed:', e));
-            }
-          }
-        });
+      if (!timerWorker) {
+        console.error("타이머 워커 없음");
+        return false;
       }
       
-      // Create Windows beep sound function
-      function playWindowsBeepSound() {
-        try {
-          // If audio isn't initialized yet, try to initialize it
-          if (!audioInitialized) {
-            try {
-              unlockAudio();
-            } catch (e) {
-              console.error("Failed to initialize audio:", e);
-            }
-          }
-          
-          // If still not initialized, we can't play sound
-          if (!audioInitialized) {
-            console.error("Audio not initialized - user interaction required");
-            return false;
-          }
-          
-          try {
-            // Resume audio context if it's suspended (important for Safari)
-            if (audioContext.state === 'suspended') {
-              audioContext.resume();
-            }
-            
-            // Create sound nodes
-            const gainNode = audioContext.createGain();
-            const oscillator = audioContext.createOscillator();
-            
-            // Set up the sound
-            oscillator.type = 'square';
-            oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
-            gainNode.gain.setValueAtTime(0.25, audioContext.currentTime);
-            
-            // Connect and play
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            
-            // Play the beep pattern
-            oscillator.start();
-            setTimeout(() => {
-              oscillator.stop();
-              // Second beep after delay
-              setTimeout(() => {
-                const oscillator2 = audioContext.createOscillator();
-                oscillator2.type = 'square';
-                oscillator2.frequency.setValueAtTime(600, audioContext.currentTime);
-                oscillator2.connect(gainNode);
-                oscillator2.start();
-                setTimeout(() => {
-                  oscillator2.stop();
-                }, 150);
-              }, 200);
-            }, 150);
-            
-            console.log("Alarm sound played successfully");
-            return true;
-          } catch (e) {
-            console.error("Error playing alarm sound:", e);
-            return false;
-          }
-        } catch (e) {
-          console.error("Error playing Windows beep sound:", e);
-          return false;
-        }
-      }
+      // 타이머 상태 업데이트
+      timerState.isRunning = true;
+      timerState.duration = durationSeconds;
+      timerState.startTime = Date.now();
+      timerState.remainingTime = durationSeconds;
       
-      // 앱이 종료될 때 리소스 정리
-      window.addEventListener('beforeunload', function() {
-        if (silentAudioInterval) {
-          clearInterval(silentAudioInterval);
-        }
-        if (wakeLockObj) {
-          wakeLockObj.release();
-        }
+      // 워커에 시작 메시지 전송
+      timerWorker.postMessage({
+        action: 'start',
+        duration: durationSeconds
       });
       
-      console.log("Audio system setup completed");
-    });
+      // Wake Lock 요청
+      requestWakeLock();
+      
+      // 오디오 초기화
+      initAudio();
+      
+      return true;
+    };
+    
+    // 타이머 중지
+    window.stopBackgroundTimer = function() {
+      console.log("타이머 중지");
+      
+      if (!timerWorker) {
+        console.error("타이머 워커 없음");
+        return false;
+      }
+      
+      // 타이머 상태 업데이트
+      timerState.isRunning = false;
+      
+      // 워커에 중지 메시지 전송
+      timerWorker.postMessage({ action: 'stop' });
+      
+      // Wake Lock 해제
+      if (wakeLock) {
+        wakeLock.release().catch(err => {
+          console.error("Wake Lock 해제 실패:", err);
+        });
+        wakeLock = null;
+      }
+      
+      return true;
+    };
+    
+    // 타이머 상태 가져오기
+    window.getTimerState = function() {
+      if (!timerWorker) {
+        return { isRunning: false, remainingTime: 0 };
+      }
+      
+      // 워커에 상태 요청
+      timerWorker.postMessage({ action: 'get_state' });
+      
+      // 현재 상태 반환
+      return {
+        isRunning: timerState.isRunning,
+        remainingTime: timerState.remainingTime
+      };
+    };
+    
+    // 알람 소리 재생
+    window.playAlarmSound = function() {
+      console.log("알람 소리 재생");
+      return playBeep();
+    };
   </script>
+  
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
