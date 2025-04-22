@@ -1,4 +1,4 @@
-# Occupation Management Alarm App 
+# 지금뭐해(Occupation Management Alarm App) 
 
 이 앱은 웹 환경에서 안정적으로 작동하는 작업관리 알람 타이머 앱입니다. 특히 iOS Safari를 포함한 모든 브라우저에서 백그라운드 타이머와 오디오 재생이 가능하도록 설계되었습니다. Flutter 웹을 기반으로 하며, 모바일 환경에서도 PWA(Progressive Web App)로 설치하여 사용할 수 있습니다.
 
