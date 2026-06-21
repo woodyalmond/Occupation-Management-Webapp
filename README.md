@@ -80,6 +80,67 @@
 - Flutter SDK 3.0.0 이상
 - Dart 2.17.0 이상
 - 웹 개발을 위한 Chrome 또는 Edge 브라우저
+- Docker 및 Docker Compose (로컬 MariaDB/API 실행용)
+
+### Docker Compose 로컬 배포 환경
+MariaDB, API, Flutter Web UI를 모두 Docker Compose로 실행하려면:
+
+1. 이미지를 빌드합니다:
+   ```
+   docker-compose build web api
+   ```
+
+2. 전체 서비스를 실행합니다:
+   ```
+   docker-compose up -d mariadb api web
+   ```
+
+3. 접속합니다:
+   ```
+   http://127.0.0.1:8080
+   ```
+
+API 상태는 다음 주소에서 확인합니다:
+```
+curl http://127.0.0.1:8000/health
+```
+
+UI 컨테이너 상태는 다음 주소에서 확인합니다:
+```
+curl http://127.0.0.1:8080/health
+```
+
+Flutter Web UI는 Docker 안에서 빌드되고, Nginx가 `8080` 포트로 정적 파일을 서빙합니다. UI는 브라우저 기준 주소인 `http://127.0.0.1:8000`으로 API를 호출합니다.
+
+### Daily Note Markdown 저장
+활동 기록과 할일은 날짜별 Markdown 파일로도 저장할 수 있습니다.
+
+- 저장 위치: `papers/dailynote/YYYY-MM-DD.md`
+- 저장 방식: 같은 날짜 파일은 DB 기준 최신 상태로 덮어씁니다.
+- 자동 저장: 할일/활동을 생성, 수정, 삭제하면 해당 날짜 파일을 자동 갱신합니다.
+- 수동 저장: 앱의 `기록` 탭에서 날짜를 선택한 뒤 `MD 저장` 버튼을 누릅니다.
+
+### 로컬 CRUD 개발 환경
+현재 저장소의 배포 파일은 그대로 보존하고, 새 Flutter 소스는 `app/`, 로컬 API는 `api/`에 있습니다.
+
+1. 로컬 MariaDB와 API를 실행합니다:
+   ```
+   docker-compose up -d mariadb api
+   ```
+
+2. API 상태를 확인합니다:
+   ```
+   curl http://127.0.0.1:8000/health
+   ```
+
+3. Flutter 앱을 실행합니다:
+   ```
+   cd app
+   flutter pub get
+   flutter run -d chrome
+   ```
+
+앱은 기본적으로 `http://127.0.0.1:8000` API에 연결해 활동 기록과 할일을 저장합니다.
 
 ### 개발 환경 설정
 1. Flutter SDK를 설치합니다:

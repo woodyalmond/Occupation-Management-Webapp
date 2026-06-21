@@ -1,0 +1,62 @@
+# --- 비밀값 (절대 커밋 금지) ---
+.env
+.env.*
+!.env.example
+
+# --- OS / 에디터 ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# --- Python (api, sync 등) ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+.venv*/
+venv/
+env/
+api/.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+
+# --- Flutter (app) ---
+app/.dart_tool/
+app/.packages
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+
+# build/web만 수업 3-tier 배포용으로 포함, 나머지 빌드 산출물은 제외
+app/build/**
+!app/build/web/
+!app/build/web/**
+
+# --- gh-pages 레거시 (루트 정적 파일) ---
+# main 브랜치에서는 app/build/web/을 사용합니다.
+# gh-pages 브랜치는 루트에 빌드 결과를 두는 구조이므로, 해당 브랜치에서는
+# 이 섹션을 주석 처리하거나 브랜치별 .gitignore를 다르게 유지하세요.
+/main.dart.js
+/index.html
+/flutter.js
+/flutter_bootstrap.js
+/flutter_service_worker.js
+/service-worker.js
+/manifest.json
+/version.json
+/favicon.png
+/.last_build_id
+/.nojekyll
+/assets/
+/canvaskit/
+/icons/
+
+# --- 내부 작업 메모 (배포 예시 비밀번호 포함 가능) ---
+api/cursor_frontend_deployment_to_tomcat_on.md

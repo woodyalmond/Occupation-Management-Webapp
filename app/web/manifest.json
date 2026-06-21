@@ -1,0 +1,9 @@
+{
+  "name": "지금뭐해",
+  "short_name": "지금뭐해",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3f51b5",
+  "description": "Local alarm timer and activity tracker."
+}

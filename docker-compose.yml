@@ -1,0 +1,57 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: alarmapp-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: alarmapp
+      MARIADB_USER: alarmapp
+      MARIADB_PASSWORD: alarmapp_password
+      MARIADB_ROOT_PASSWORD: root_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - alarmapp_mariadb_data:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  api:
+    build:
+      context: ./api
+    container_name: alarmapp-api
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: mariadb
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: alarmapp
+      MYSQL_USER: alarmapp
+      MYSQL_PASSWORD: alarmapp_password
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../papers/dailynote:/dailynote
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./app
+      args:
+        API_BASE_URL: ""
+    container_name: alarmapp-web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  alarmapp_mariadb_data:
